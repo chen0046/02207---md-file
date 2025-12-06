@@ -15,7 +15,7 @@ marb/src/
     ├── cl_marb_tb_base_test.py  # Base test class (A3)
     ├── cl_marb_tb_config.py     # Configuration object (A3)
     ├── cl_marb_tb_env.py        # Environment (A2)
-    ├── cl_marb_tb_virtual_sequencer.py  # Virtual sequencerw (A2)
+    ├── cl_marb_tb_virtual_sequencer.py  # Virtual sequencer (A2)
     │
     ├── cl_marb_ref_model.py     # Reference model (A5)
     ├── cl_marb_scoreboard.py    # Scoreboard (A6)
@@ -568,141 +568,142 @@ class MarbAckChecker:
 
 ---
 
-## 📊 Data Flow Diagram (Detailed with File Locations)
+## 📊 Data Flow & Component Interaction Diagram
 
 ```
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                            TESTBENCH                                          │
-│  Test Class (tests/)                                                          │
-│  └─ cl_marb_static_test.py          cl_marb_dynamic_test.py                  │
-│  └─ cl_marb_basic_test.py                                                    │
-└──────────────────────────────────────────────────────────────────────────────┘
-                                      │
-        ┌─────────────────────────────┴─────────────────────────────────┐
-        │                                                                 │
-        ▼                                                                 ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                              TEST FLOW                                           │
+│  ┌─ tests/cl_marb_static_test.py [Static Priority Test]                        │
+│  └─ tests/cl_marb_dynamic_test.py [Dynamic Priority Test]                      │
+│  └─ tests/cl_marb_basic_test.py [Basic Test Template]                          │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                         CONFIGURATION & STIMULUS GENERATION                      │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                   │
+│  ┌─ cl_marb_tb_config.py [Configuration Object]                                │
+│  │  ├─ Holds: APB config, SDT CIF/MIF configs                                  │
+│  │  └─ Passed via ConfigDB to environment                                      │
+│  │                                                                               │
+│  ┌─ cl_marb_tb_base_test.py [Base Test]                                        │
+│  │  ├─ build_phase: Creates config, environment                                │
+│  │  ├─ connect_phase: Maps DUT signals to virtual interfaces                  │
+│  │  └─ run_phase: Starts clock, reset, checkers                               │
+│  │                                                                               │
+│  ┌─ cl_marb_tb_virtual_sequencer.py [Virtual Sequencer]                        │
+│  │  ├─ cif0_seqr, cif1_seqr, cif2_seqr [CIF Sequencers]                       │
+│  │  └─ apb_seqr [APB Sequencer]                                                │
+│  │                                                                               │
+│  ┌─ vseqs/cl_marb_*_seq.py [Virtual Sequences]                                 │
+│  │  ├─ cl_marb_static_seq.py [Static Priority Sequence]                       │
+│  │  ├─ cl_marb_dynamic_seq.py [Dynamic Priority Sequence]                     │
+│  │  ├─ cl_marb_basic_seq.py [Basic Sequence]                                  │
+│  │  └─ cl_reg_simple_seq.py [Register Config Sequence]                        │
+│  │                                                                               │
+│  └─ Coordinates stimulus across all agents                                      │
+│                                                                                   │
+└────────────────────────────────┬────────────────────────────────────────────────┘
+                                 │
+        ┌────────────────────────┼────────────────────────┐
+        │                        │                        │
+        ▼                        ▼                        ▼
+    ┌──────────────┐      ┌──────────────┐      ┌──────────────┐
+    │ APB Agent    │      │ CIF Agents   │      │ MIF Agent    │
+    │ (PRODUCER)   │      │ (PRODUCER)   │      │ (CONSUMER)   │
+    │ uvc/apb/     │      │ uvc/sdt/     │      │ uvc/sdt/     │
+    │              │      │              │      │              │
+    │ ├─ Driver    │      │ ├─ Drivers   │      │ ├─ Monitor   │
+    │ ├─ Monitor   │      │ ├─ Monitors  │      │ └─ Sequencer │
+    │ └─ Sequencer │      │ ├─ Sequencers│      │              │
+    │              │      │ └─ (3x CIF)  │      │              │
+    └──────┬───────┘      └──────┬───────┘      └──────┬───────┘
+           │                     │                     │
+           │                     │                     │
+           └──────────┬──────────┴──────────┬──────────┘
+                      │                     │
+                      ▼                     ▼
+            [DUT RTL: mem_arb.sv]
+            ├─ APB Config Interface
+            ├─ CIF0, CIF1, CIF2 Request Interfaces
+            └─ MIF Output Interface
+                      │
+        ┌─────────────┼─────────────┐
+        │             │             │
+        ▼             ▼             ▼
+    ┌────────────────────────────────────────────────────────────────┐
+    │           CHECKING & VERIFICATION COMPONENTS (Parallel)         │
+    ├────────────────────────────────────────────────────────────────┤
+    │                                                                  │
+    │  ┌─ cl_marb_ack_checker.py [ACK Constraint Checker - A9]       │
+    │  │  Function: Ensures only 1 CIF ACK per cycle (DR08)          │
+    │  │  Input: All CIF ack signals                                 │
+    │  │  Output: Pass/Fail assertion                                │
+    │  │                                                              │
+    │  ┌─ uvc/sdt/src/sdt_if_assertions.py [Protocol Checker - A7]   │
+    │  │  Function: Validates SDT protocol compliance                │
+    │  │  Input: All SDT interface signals                           │
+    │  │  Output: Pass/Fail assertions                               │
+    │  │  Checks: rd∧wr=0, ack timing, signal validity              │
+    │  │                                                              │
+    │  ┌─ cl_marb_ref_model.py [Reference Model - A5]               │
+    │  │  Function: Predicts correct arbitration outcome             │
+    │  │  Input 1: APB Monitor → Configuration changes              │
+    │  │  Input 2: CIF0/1/2 Monitors → Client requests              │
+    │  │  Algorithm: Static priority [CIF0>CIF1>CIF2] or            │
+    │  │             Dynamic priority (sorted by register values)    │
+    │  │  Output: Predictions via ref_ap analysis port              │
+    │  │                                                              │
+    │  ┌─ cl_marb_scoreboard.py [Scoreboard - A6]                   │
+    │  │  Function: Compares predictions vs actual behavior          │
+    │  │  Input 1: ref_model predictions (ref_ap)                   │
+    │  │  Input 2: MIF Monitor actual txns (dut_ap)                 │
+    │  │  Comparison: Address match, access type match, data        │
+    │  │  Output: Mismatch count (0 = PASS)                         │
+    │  │                                                              │
+    │  └─ cl_marb_coverage.py [Coverage Collector - A8]             │
+    │     Function: Measures verification completeness               │
+    │     Input: MIF Monitor transactions                            │
+    │     Metrics: Write-read patterns, bursts, address space        │
+    │     Output: Coverage reports (XML)                             │
+    │                                                                  │
+    └────────────────────────────────────────────────────────────────┘
+```
 
-┌────────────────────────────────────────┐     ┌─────────────────────────────┐
-│   STIMULUS GENERATION PATH              │     │  CONFIGURATION PATH         │
-│                                        │     │                             │
-│   Sequences (vseqs/)                  │     │   APB Config Sequence       │
-│   ├─ cl_marb_basic_seq.py             │     │   (vseqs/)                  │
-│   ├─ cl_marb_static_seq.py            │     │   └─ cl_reg_simple_seq.py   │
-│   ├─ cl_marb_dynamic_seq.py           │     │       cl_marb_*_apb_cfg_seq │
-│   └─ Individual CIF sequences         │     │                             │
-│       (cif0, cif1, cif2)              │     │  ▼                          │
-│   │                                    │     │ APB Agent (uvc/apb/)        │
-│   ▼                                    │     │ ├─ cl_apb_driver.py         │
-│                                        │     │ ├─ cl_apb_monitor.py        │
-│   Virtual Sequencer                   │     │ └─ cl_apb_sequencer.py      │
-│   (cl_marb_tb_virtual_sequencer.py)   │     │ │                           │
-│   ├─ cif0_seqr → CIF0 Agent           │     │ ▼                           │
-│   ├─ cif1_seqr → CIF1 Agent           │     │ [DUT]                       │
-│   ├─ cif2_seqr → CIF2 Agent           │     │ └─ APB Control Interface    │
-│   └─ apb_seqr → APB Agent             │     │    (sets mode, priorities)  │
-│   │                                    │     │                             │
-│   ▼                                    │     └─────────────────────────────┘
-│                                        │
-│   SDT Agents (uvc/sdt/src/)            │
-│   ├─ CIF0 Agent:                       │
-│   │  ├─ cl_sdt_driver.py              │
-│   │  ├─ cl_sdt_monitor.py             │
-│   │  └─ cl_sdt_sequencer.py           │
-│   │  (Producer mode)                  │
-│   │                                    │
-│   ├─ CIF1 Agent: (same structure)     │
-│   ├─ CIF2 Agent: (same structure)     │
-│   │                                    │
-│   └─ MIF Agent: (Consumer mode)       │
-│      (monitors output only)            │
-│   │                                    │
-│   ▼                                    │
-│ Drives SDT Request Signals:           │
-│ ├─ CIF0: c0_rd, c0_wr, c0_addr, ... │
-│ ├─ CIF1: c1_rd, c1_wr, c1_addr, ... │
-│ └─ CIF2: c2_rd, c2_wr, c2_addr, ... │
-│                                        │
-└────────────────────────────────────────┘
-                │
-                │
-                ▼
-       ┌────────────────────┐
-       │   DUT (RTL)        │
-       │ mem_arb.sv         │
-       │ - Arbitration      │
-       │ - Multiplexing     │
-       └────────┬───────────┘
-                │
-      Produces: m_rd, m_wr, m_addr, m_wr_data, m_ack
-                │
-                │
-┌───────────────┴────────────────────────────────────────────────────────────┐
-│                         CHECKING PATH (Parallel)                            │
-│                                                                              │
-│  ┌──────────────────────────────────────────────────────────────────────┐  │
-│  │  Protocol Checkers (A7, A9)                                          │  │
-│  │  - From: uvc/sdt/src/sdt_if_assertions.py  (SDT Protocol Checker)   │  │
-│  │  - From: cl_marb_ack_checker.py             (ACK Checker - DR08)    │  │
-│  │  - Validates signals in real-time                                   │  │
-│  │  ├─ Checks: rd ∧ wr ≠ 1 (mutual exclusion)                         │  │
-│  │  ├─ Checks: ack ≤ 1 per cycle                                       │  │
-│  │  ├─ Checks: addr not X when active                                  │  │
-│  │  └─ Reports violations immediately                                  │  │
-│  └──────────────────────────────────────────────────────────────────────┘  │
-│                             │                                                │
-│                             ▼                                                │
-│  ┌──────────────────────────────────────────────────────────────────────┐  │
-│  │  Reference Model (A5)                                                │  │
-│  │  - File: cl_marb_ref_model.py                                        │  │
-│  │  - Subscriber: Listens to all transactions                           │  │
-│  │    ├─ Input 1: APB Config writes (from APB Monitor)                 │  │
-│  │    │             Registers: enable, mode, dprio_vals[3]            │  │
-│  │    │                                                                 │  │
-│  │    └─ Input 2: CIF Requests (from CIF0/1/2 Monitors)               │  │
-│  │                  rd, wr, addr from all 3 clients                    │  │
-│  │                                                                      │  │
-│  │  - Algorithm: Arbitrates using static or dynamic priority           │  │
-│  │  - Output: Predictions via ref_ap (analysis port)                  │  │
-│  │    ├─ Winning client ID                                             │  │
-│  │    ├─ Expected address                                              │  │
-│  │    └─ Expected data (for writes)                                    │  │
-│  └──────────────────────────────────────────────────────────────────────┘  │
-│                             │                                                │
-│                             ▼ (Predictions)                                  │
-│  ┌──────────────────────────────────────────────────────────────────────┐  │
-│  │  Scoreboard (A6)                                                     │  │
-│  │  - File: cl_marb_scoreboard.py                                       │  │
-│  │  - Dual Subscribers:                                                 │  │
-│  │    ├─ ref_subscriber: Gets predictions from Reference Model          │  │
-│  │    └─ dut_subscriber: Gets actual txns from MIF Monitor            │  │
-│  │  - Comparison Logic:                                                 │  │
-│  │    ├─ Compare addr: prediction.addr == actual.addr ✓               │  │
-│  │    ├─ Compare access: prediction.rd/wr == actual.rd/wr ✓           │  │
-│  │    └─ Compare data: prediction.data == actual.data (write only) ✓  │  │
-│  │  - Report: Mismatch count (zero = PASS)                             │  │
-│  └──────────────────────────────────────────────────────────────────────┘  │
-│                             │                                                │
-│                             ▼ (MIF Transactions Flow)                        │
-│  ┌──────────────────────────────────────────────────────────────────────┐  │
-│  │  Coverage Collector (A8)                                             │  │
-│  │  - File: cl_marb_coverage.py                                         │  │
-│  │  - Subscriber: Listens to MIF Monitor (actual transactions)         │  │
-│  │  - Coverage Groups:                                                  │  │
-│  │    ├─ Write-Read Same Address (back-to-back)                        │  │
-│  │    ├─ Burst Pattern Detection                                       │  │
-│  │    └─ Full Address Space (0-255)                                    │  │
-│  │  - Output: Coverage reports (XML export to sim_build/)              │  │
-│  └──────────────────────────────────────────────────────────────────────┘  │
-│                                                                              │
-└──────────────────────────────────────────────────────────────────────────────┘
+---
 
-MONITOR ANALYSIS PORT CONNECTIONS:
-├─ CIF0 Monitor → Analysis Port → Reference Model, Coverage Collector
-├─ CIF1 Monitor → Analysis Port → Reference Model, Coverage Collector
-├─ CIF2 Monitor → Analysis Port → Reference Model, Coverage Collector
-├─ APB Monitor → Analysis Port → Reference Model
-└─ MIF Monitor → Analysis Port → Scoreboard (dut_subscriber), Coverage Collector
-                 Reference Model → Analysis Port → Scoreboard (ref_subscriber)
+## 📈 Data Flow Between Components
+
+```
+STIMULUS PATH:
+vseqs/ sequences  →  Sequencers (virtual_sequencer)
+                       ├─ cif0_seqr  →  CIF0 Agent driver  →  DUT
+                       ├─ cif1_seqr  →  CIF1 Agent driver  →  DUT
+                       ├─ cif2_seqr  →  CIF2 Agent driver  →  DUT
+                       └─ apb_seqr   →  APB Agent driver   →  DUT APB
+
+OBSERVATION PATH:
+DUT signals  →  Monitors (inside agents)
+                 ├─ APB Monitor  →  Analysis port  →  ref_model
+                 ├─ CIF0 Monitor →  Analysis port  →  ref_model
+                 ├─ CIF1 Monitor →  Analysis port  →  ref_model
+                 ├─ CIF2 Monitor →  Analysis port  →  ref_model
+                 └─ MIF Monitor  →  Analysis port  ─┬─→ scoreboard (dut_subscriber)
+                                                      └─→ coverage
+
+PREDICTION PATH:
+ref_model  →  Analysis port (ref_ap)  →  scoreboard (ref_subscriber)
+               (provides predictions)
+
+CHECKING PATH:
+DUT signals  →  Checkers (run in parallel with simulation)
+                 ├─ Protocol Checkers  (sdt_if_assertions.py)
+                 └─ ACK Checker        (cl_marb_ack_checker.py)
+
+REPORTING PATH:
+scoreboard  →  Mismatch count  →  report_phase  →  Pass/Fail
+coverage    →  Coverage metrics  →  final_phase  →  sim_build/marb_cov.xml
 ```
 
 ---
@@ -872,23 +873,23 @@ class SDTProtocolChecker:
 ## 📚 File Dependencies Summary
 
 ```
-cl_marb_tb_base_test.py
+cl_marb_tb_base_test.py (cl_marb_tb_base_test.py)
 ├─ imports: cl_marb_tb_config, cl_marb_tb_env
 ├─ imports: uvc.sdt, uvc.apb
 ├─ imports: MarbAckChecker, SDTProtocolChecker
 └─ used by: all test cases
 
-cl_marb_tb_env.py
+cl_marb_tb_env.py (cl_marb_tb_env.py)
 ├─ imports: cl_marb_ref_model, cl_marb_scoreboard, cl_marb_coverage
 ├─ imports: uvc.sdt.cl_sdt_agent, uvc.apb.cl_apb_agent
 └─ used by: cl_marb_tb_base_test
 
-tests/cl_marb_*_test.py
+tests/cl_marb_*_test.py (tests/*)
 ├─ imports: cl_marb_tb_base_test
 ├─ imports: vseqs.cl_reg_simple_seq, vseqs.cl_marb_*_seq
 └─ parent: cl_marb_tb_base_test (inherit all setup)
 
-vseqs/cl_marb_*_seq.py
+vseqs/cl_marb_*_seq.py (vseqs/*)
 ├─ imports: uvc.sdt, uvc.apb
 └─ used by: test cases to drive stimulus
 ```
